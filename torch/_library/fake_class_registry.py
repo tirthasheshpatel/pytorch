@@ -21,7 +21,7 @@ class FakeScriptObject:
 
         from torch._library.opaque_object import is_opaque_type
 
-        # We dont want to deepcopy when tracing with opaque objects because
+        # We don't want to deepcopy when tracing with opaque objects because
         # if a mutation happens intentionally (Ex. caching in device mesh)
         # then we want it to be recorded on the real object
         real_obj = x
@@ -30,7 +30,7 @@ class FakeScriptObject:
                 with _disable_current_modes():
                     real_obj = copy.deepcopy(x)
             except (RuntimeError, TypeError) as e:
-                log.warning(  # noqa: G200
+                log.warning(
                     "Unable to deepcopy the custom object %s due to %s. "
                     "Defaulting to the user given object. This might be "
                     "dangerous as side effects may be directly applied "
@@ -51,7 +51,7 @@ class FakeScriptObject:
                 "The fake kernel should not depend on the contents of the "
                 "OpaqueObject at all, so we're erroring out. If this attr is "
                 "a method or constant attribute, you can allow this member access by "
-                "registering it via `register_opaque_type(members=...)`."
+                "registering it via `register_custom_class(members=...)`."
             ) from e
 
     def __setattr__(self, name, value):
