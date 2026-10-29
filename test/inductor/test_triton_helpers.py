@@ -11,9 +11,12 @@ Covers:
   integer type before the final bitcast, preventing size mismatch errors.
 """
 
+import math
+
 import torch
 from torch._inductor.runtime.triton_helpers import (
     exclusive_scan_decoupled_lookback_64,
+    launches_dependents,
     max2,
     max2_strict,
     maximum,
@@ -27,6 +30,7 @@ from torch._inductor.runtime.triton_helpers import (
 from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
 from torch.testing._internal.inductor_utils import GPU_TYPE, HAS_GPU, requires_gpu
+from torch.testing._internal.triton_utils import requires_cuda_and_triton
 
 
 if HAS_GPU:
@@ -151,6 +155,16 @@ if HAS_GPU:
         else:
             tl.store(min_ptr + row, min2(x, 0))
             tl.store(max_ptr + row, max2(x, 0))
+
+    @triton.jit
+    def test_kernel_launches_dependents(
+        result_ptr, NUM_SMS: tl.constexpr, MAX_THREADS_PER_SM: tl.constexpr
+    ):
+        num_x = tl.num_programs(0)
+        num_y = tl.num_programs(1)
+        pid = tl.program_id(0) + (tl.program_id(1) + tl.program_id(2) * num_y) * num_x
+        launch = launches_dependents(NUM_SMS, MAX_THREADS_PER_SM)
+        tl.store(result_ptr + pid, launch.to(tl.int8))
 
 
 class ExclusiveScanDecoupledLookback64Test(TestCase):
@@ -490,6 +504,26 @@ class MinimumMaximumTest(TestCase):
         actual_max_bits = actual_max.view(torch.int32)
         self.assertEqual(actual_min_bits, torch.full_like(actual_min_bits, -(1 << 31)))
         self.assertEqual(actual_max_bits, torch.zeros_like(actual_max_bits))
+
+
+class LaunchDependentsTest(TestCase):
+    @requires_cuda_and_triton
+    def test_launches_dependents(self) -> None:
+        # A made-up GPU of 4 SMs of 1024 threads fits 16 CTAs of 8 warps at once
+        # and 8 CTAs of 16 warps.
+        for num_warps in (4, 8, 16):
+            for grid in ((8,), (16,), (17,), (4, 4), (2, 3, 3)):
+                with self.subTest(num_warps=num_warps, grid=grid):
+                    num_ctas = math.prod(grid)
+                    result = torch.full(
+                        (num_ctas,), -1, dtype=torch.int8, device=GPU_TYPE
+                    )
+                    test_kernel_launches_dependents[grid](
+                        result, 4, 1024, num_warps=num_warps
+                    )
+                    fits = num_ctas <= 4 * (1024 // (32 * num_warps))
+                    expected = [int(num_warps > 4 and fits)] * num_ctas
+                    self.assertEqual(result.tolist(), expected)
 
 
 if HAS_GPU:

@@ -1107,6 +1107,28 @@ def x_grid_barrier(sem):
     tl.debug_barrier()
 
 
+@triton.jit
+def launches_dependents(NUM_SMS: tl.constexpr, MAX_THREADS_PER_SM: tl.constexpr):
+    """
+    Whether this CTA should run gdc_launch_dependents to let the next kernel
+    launch early (PDL): every CTA if the kernel has more than 4 warps per CTA and
+    its grid fits on the GPU at once, no CTA otherwise.
+
+    The next kernel launches once every CTA of this one has run
+    gdc_launch_dependents or exited. Every CTA that runs it slows down how fast
+    the GPU launches this kernel's CTAs, which costs more than the early launch
+    saves for CTAs of few warps and for grids that don't fit on the GPU at once.
+    """
+    num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+    # CTAs of more than 4 warps run out of threads before the per-SM CTA limit.
+    # Registers and shared memory may fit fewer, so this may undercount waves.
+    one_wave: tl.constexpr = NUM_SMS * (MAX_THREADS_PER_SM // (32 * num_warps))
+    # Wraps only for grids of 2**31 CTAs, which makes the wrong choice but never
+    # a wrong result.
+    num_ctas = tl.num_programs(0) * tl.num_programs(1) * tl.num_programs(2)
+    return (num_ctas <= one_wave) & (num_warps > 4)
+
+
 def triton_builtin(f: Callable[..., _T]) -> Callable[..., _T]:
     """
     Decorator to mark a function as a Triton built-in function.  These functions
